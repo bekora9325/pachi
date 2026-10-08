@@ -37,6 +37,8 @@
   .month-box .label{font-size:13px;font-weight:700}
   .big{font-size:27px;font-weight:800;margin-top:6px;white-space:nowrap}
   .big small{font-size:14px;margin-left:2px}
+  .cash-line{font-size:12px;color:var(--sub);margin-top:4px;white-space:nowrap}
+  .cash-line b{font-size:14px;margin-left:4px}
   .mini{flex:1;margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-content:center;font-size:13px}
   .mini dt{color:var(--sub)} .mini dd{margin:0;font-weight:600}
   .year-line{padding:10px 16px 14px;font-size:14px;font-weight:700}
@@ -79,6 +81,7 @@
   .btn.wide{display:block;width:100%;margin-top:8px}
   .preview{max-width:640px;margin:0 auto 8px;text-align:center;font-size:14px;color:var(--sub)}
   .preview b{font-size:18px;margin-left:6px}
+  .preview small{margin-left:8px}
 
   /* フォーム */
   .form{max-width:640px;margin:0 auto;background:#fff;padding-bottom:calc(150px + env(safe-area-inset-bottom))}
@@ -112,10 +115,14 @@
   .total{font-size:28px;font-weight:800;margin-bottom:8px}
   .kv{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;margin:0;font-size:14px}
   .kv dt{color:var(--sub)} .kv dd{margin:0;font-weight:600;text-align:right}
+  .seg{display:flex;background:var(--primary-soft);border-radius:10px;padding:3px;margin-top:10px}
+  .seg button{flex:1;border:none;background:none;padding:9px;border-radius:8px;font-weight:700;font-size:14px;color:var(--primary-dark)}
+  .seg button.on{background:#fff;color:var(--primary);box-shadow:0 1px 2px rgba(0,0,0,.12)}
   .tbl{width:100%;border-collapse:collapse;font-size:13px}
   .tbl th{color:var(--sub);font-weight:600;text-align:right;padding:6px 4px;border-bottom:1px solid var(--line)}
   .tbl td{padding:8px 4px;border-bottom:1px solid #eef2f8;text-align:right;white-space:nowrap}
   .tbl th:first-child,.tbl td:first-child{text-align:left;white-space:normal}
+  .tbl tr.sum td{font-weight:800;border-top:1px solid var(--line);border-bottom:none}
   .chart{width:100%;height:auto;display:block}
   .chart .grid{stroke:#e5eaf2} .chart .axis0{stroke:#9aa7b8}
   .chart .tick{font-size:10px;fill:#6b7280}
@@ -128,6 +135,14 @@
   .ops{display:flex;gap:6px;flex:none}
   .mini-btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 10px;font-size:13px;color:var(--text)}
   .mini-btn.danger{color:var(--minus)}
+
+  /* 追加・編集の小窓 */
+  .modal{position:fixed;inset:0;z-index:40;background:rgba(15,23,42,.45);display:flex;align-items:flex-end;justify-content:center}
+  .sheet{background:#fff;width:100%;max-width:640px;border-radius:16px 16px 0 0;padding:18px 16px calc(16px + env(safe-area-inset-bottom))}
+  .sheet h3{margin:0 0 14px;font-size:17px}
+  .field{margin-bottom:12px}
+  .field label{display:block;font-size:13px;font-weight:600;color:var(--primary-dark);margin-bottom:4px}
+  .sheet-btns{display:flex;gap:10px;margin-top:6px}
 
   #toast{position:fixed;left:50%;bottom:120px;transform:translateX(-50%);background:rgba(31,41,55,.92);color:#fff;padding:10px 16px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:50;white-space:nowrap}
   #toast.show{opacity:1}
@@ -142,14 +157,16 @@
 
 /* ===== 定数・状態 ===== */
 const STORAGE_KEY = 'pachiBalance.v1';
-const KIND_LABEL = { pachinko: 'パチンコ', slot: 'スロット' };
+const DATA_VERSION = 2;
+const KIND_LABEL = { slot: 'スロット', pachinko: 'パチンコ' };
 const WEEK = ['日', '月', '火', '水', '木', '金', '土'];
 
 const app = document.getElementById('app');
 let db = loadDb();
+if (migrate(db)) saveDb();
 const view = (() => {
   const t = new Date();
-  return { year: t.getFullYear(), month: t.getMonth() + 1, selected: ymd(t), statsYear: String(t.getFullYear()), homeScroll: 0 };
+  return { year: t.getFullYear(), month: t.getMonth() + 1, selected: ymd(t), statsYear: String(t.getFullYear()), statsMode: 'all', homeScroll: 0 };
 })();
 
 /* ===== 小さな道具 ===== */
@@ -188,18 +205,33 @@ function toast(msg) {
 
 /* ===== データの保存・読み込み ===== */
 function emptyDb() {
-  return { version: 1, records: [], stores: [], tags: [], settings: { defaultRate: '', lastBackup: '' } };
+  return { version: DATA_VERSION, records: [], stores: [], machines: [], tags: [], settings: { defaultRate: '', lastBackup: '' } };
 }
 function normalizeDb(d) {
   const base = emptyDb();
   if (!d || typeof d !== 'object') return base;
   return {
-    version: 1,
+    version: d.version || 1,
     records: Array.isArray(d.records) ? d.records : [],
     stores: Array.isArray(d.stores) ? d.stores : [],
+    machines: Array.isArray(d.machines) ? d.machines : [],
     tags: Array.isArray(d.tags) ? d.tags : [],
     settings: Object.assign(base.settings, d.settings || {})
   };
+}
+function migrate(d) {
+  let changed = d.version !== DATA_VERSION;
+  for (const r of d.records) {
+    if (!r.machineId && r.machine) {
+      let m = d.machines.find(x => x.name === r.machine);
+      if (!m) { m = { id: uid(), name: r.machine, kind: r.kind || 'slot', rate: '' }; d.machines.push(m); }
+      r.machineId = m.id;
+      changed = true;
+    }
+    if ('machine' in r) { delete r.machine; changed = true; }
+  }
+  d.version = DATA_VERSION;
+  return changed;
 }
 function loadDb() {
   let raw = null;
@@ -228,27 +260,50 @@ async function requestPersist() {
   requestPersist.done = true;
   try { if (!(await navigator.storage.persisted())) await navigator.storage.persist(); } catch (e) {}
 }
-function storeName(id) { const s = db.stores.find(x => x.id === id); return s ? s.name : ''; }
+function storeOf(id) { return db.stores.find(x => x.id === id) || null; }
+function machineOf(id) { return db.machines.find(x => x.id === id) || null; }
+function storeName(id) { const s = storeOf(id); return s ? s.name : ''; }
+function machineName(id) { const m = machineOf(id); return m ? m.name : ''; }
 function tagName(id) { const t = db.tags.find(x => x.id === id); return t ? t.name : ''; }
+function kindOf(r) { const m = machineOf(r.machineId); return m ? m.kind : (r.kind || ''); }
+function usageCount(field) {
+  const c = {};
+  for (const r of db.records) if (r[field]) c[r[field]] = (c[r[field]] || 0) + 1;
+  return c;
+}
+function sortByUsage(list, field) {
+  const cnt = usageCount(field);
+  return list.slice().sort((a, b) => (cnt[b.id] || 0) - (cnt[a.id] || 0) || a.name.localeCompare(b.name, 'ja'));
+}
 
 /* ===== 計算 ===== */
 function calc(r) {
   const rate = Number(r.rate) || 0;
   const wd = Math.round((Number(r.withdrawCount) || 0) * rate);
   const dp = Math.round((Number(r.depositCount) || 0) * rate);
-  const invest = (Number(r.invest) || 0) + wd;
-  const collect = (Number(r.collect) || 0) + dp;
-  return { invest, collect, balance: collect - invest, wd, dp };
+  const cashInvest = Number(r.invest) || 0;
+  const cashCollect = Number(r.collect) || 0;
+  const invest = cashInvest + wd;
+  const collect = cashCollect + dp;
+  return { invest, collect, balance: collect - invest, wd, dp, cashInvest, cashCollect, cashBalance: cashCollect - cashInvest };
 }
 function summarize(recs) {
-  const s = { n: recs.length, invest: 0, collect: 0, balance: 0, win: 0, lose: 0, minutes: 0, timedBalance: 0 };
+  const s = { n: recs.length, invest: 0, collect: 0, balance: 0, win: 0, lose: 0, minutes: 0, timedBalance: 0,
+              cashInvest: 0, cashCollect: 0, cashBalance: 0, cashWin: 0, cashLose: 0, timedCash: 0 };
   for (const r of recs) {
     const c = calc(r);
     s.invest += c.invest; s.collect += c.collect; s.balance += c.balance;
+    s.cashInvest += c.cashInvest; s.cashCollect += c.cashCollect; s.cashBalance += c.cashBalance;
     if (c.balance > 0) s.win++; else if (c.balance < 0) s.lose++;
-    if (r.playMinutes > 0) { s.minutes += r.playMinutes; s.timedBalance += c.balance; }
+    if (c.cashBalance > 0) s.cashWin++; else if (c.cashBalance < 0) s.cashLose++;
+    if (r.playMinutes > 0) { s.minutes += r.playMinutes; s.timedBalance += c.balance; s.timedCash += c.cashBalance; }
   }
   return s;
+}
+function pick(s, mode) {
+  return mode === 'cash'
+    ? { invest: s.cashInvest, collect: s.cashCollect, balance: s.cashBalance, win: s.cashWin, lose: s.cashLose, timed: s.timedCash }
+    : { invest: s.invest, collect: s.collect, balance: s.balance, win: s.win, lose: s.lose, timed: s.timedBalance };
 }
 function recordsWithPrefix(prefix) { return db.records.filter(r => r.date.startsWith(prefix)); }
 function sortRecords(recs) {
@@ -295,6 +350,7 @@ function renderHome() {
         <div class="month-box">
           <div class="label">${view.month}月の収支</div>
           <div class="big ${tone(ms.balance)}">${signed(ms.balance)}<small>円</small></div>
+          <div class="cash-line">現金のみ<b class="${tone(ms.cashBalance)}">${signed(ms.cashBalance)}円</b></div>
         </div>
         <dl class="mini">
           <dt>投資合計</dt><dd>${fmt(ms.invest)}</dd>
@@ -390,7 +446,7 @@ function dayListHtml(date) {
     const c = calc(r);
     total += c.balance;
     const title = storeName(r.storeId) || '店舗指定なし';
-    const sub = [KIND_LABEL[r.kind], r.machine, r.table ? r.table + '番' : '', r.playMinutes ? durText(r.playMinutes) : ''].filter(Boolean).join(' / ');
+    const sub = [machineName(r.machineId), r.table ? r.table + '番' : '', r.playMinutes ? durText(r.playMinutes) : ''].filter(Boolean).join(' / ');
     return `<button class="rec" data-rec="${r.id}">
       <div><div class="main">${esc(title)}</div>${sub ? `<div class="sub">${esc(sub)}</div>` : ''}</div>
       <div class="val ${tone(c.balance)}">${signed(c.balance)}円</div>
@@ -406,16 +462,25 @@ function backupNotice() {
 }
 
 /* ===== 入力・編集画面 ===== */
+function lastRecord() {
+  return db.records.reduce((a, b) => (!a || (b.createdAt || 0) > (a.createdAt || 0)) ? b : a, null);
+}
 function renderForm(id, date) {
   let r;
   if (id) {
     r = db.records.find(x => x.id === id);
     if (!r) { toast('記録が見つかりません'); history.replaceState(null, '', '#/'); renderHome(); return; }
   } else {
+    const last = lastRecord();
+    const st = last && storeOf(last.storeId);
+    const mc = last && machineOf(last.machineId);
+    const storeId = st && !st.hidden ? st.id : '';
+    const machineId = mc && !mc.hidden ? mc.id : '';
     r = {
       id: null, date: /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? date : today(),
-      invest: 0, collect: 0, withdrawCount: 0, depositCount: 0, rate: db.settings.defaultRate || '',
-      storeId: '', kind: '', machine: '', table: '', startTime: '', endTime: '', tags: [], note: ''
+      invest: 0, collect: 0, withdrawCount: 0, depositCount: 0,
+      rate: (machineId && mc.rate) || (storeId && st.rate) || db.settings.defaultRate || '',
+      storeId, machineId, table: '', startTime: '', endTime: '', tags: [], note: ''
     };
   }
   const selTags = new Set(r.tags || []);
@@ -435,19 +500,13 @@ function renderForm(id, date) {
     <div class="sub-h">貯玉／貯メダル</div>
     <div class="row"><label class="k" for="f-withdraw">引出数</label><div class="v"><input id="f-withdraw" class="num" inputmode="numeric" placeholder="0" value="${nv(r.withdrawCount)}"><span class="unit">玉/枚</span><p class="hint">現金換算額：<span id="h-withdraw">0</span>円</p></div></div>
     <div class="row"><label class="k" for="f-deposit">貯玉数</label><div class="v"><input id="f-deposit" class="num" inputmode="numeric" placeholder="0" value="${nv(r.depositCount)}"><span class="unit">玉/枚</span><p class="hint">現金換算額：<span id="h-deposit">0</span>円</p></div></div>
-    <div class="row"><label class="k" for="f-rate">交換率</label><div class="v"><input id="f-rate" class="num" inputmode="decimal" placeholder="例：20" value="${esc(r.rate)}"><span class="unit">円/玉・枚</span><p class="hint" id="h-rate">1玉（1枚）あたりの円。5.6枚交換なら 17.86</p></div></div>
+    <div class="row"><label class="k" for="f-rate">交換率</label><div class="v"><input id="f-rate" class="num" inputmode="decimal" placeholder="例：20" value="${esc(r.rate)}"><span class="unit">円/玉・枚</span><p class="hint" id="h-rate"></p></div></div>
 
     <div class="grp-h">店舗</div>
     <div class="row"><label class="k" for="f-store">店舗名</label><div class="v"><select id="f-store">${storeOptions(r.storeId)}</select></div></div>
 
     <div class="grp-h">機種</div>
-    <div class="row"><label class="k" for="f-kind">種別</label><div class="v"><select id="f-kind">
-      <option value="">指定なし</option>
-      <option value="pachinko" ${r.kind === 'pachinko' ? 'selected' : ''}>パチンコ</option>
-      <option value="slot" ${r.kind === 'slot' ? 'selected' : ''}>スロット</option>
-    </select></div></div>
-    <div class="row"><label class="k" for="f-machine">機種名</label><div class="v"><input id="f-machine" list="machineList" placeholder="指定なし" value="${esc(r.machine)}" autocomplete="off"></div></div>
-    <datalist id="machineList">${machineNames().map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+    <div class="row"><label class="k" for="f-machine">機種名</label><div class="v"><select id="f-machine">${machineOptions(r.machineId)}</select></div></div>
     <div class="row"><label class="k" for="f-table">台番号</label><div class="v"><input id="f-table" class="num" inputmode="numeric" value="${esc(r.table)}"><span class="unit">番</span></div></div>
 
     <div class="sec-h">詳細項目</div>
@@ -466,7 +525,7 @@ function renderForm(id, date) {
     </details>
   </form>
   <div class="bottombar">
-    <div class="preview">この記録の収支<b id="pv">±0円</b></div>
+    <div class="preview">この記録の収支<b id="pv">±0円</b><small id="pv-cash"></small></div>
     <div class="bar-inner">
       ${id ? '<button class="btn sub danger" data-act="delete">削除</button>' : '<button class="btn sub" data-act="back">キャンセル</button>'}
       <button class="btn primary" data-act="save">保存する</button>
@@ -474,14 +533,19 @@ function renderForm(id, date) {
   </div>`;
 
   function renderTagChips() {
-    const list = db.tags.filter(t => !t.hidden || selTags.has(t.id));
+    const list = sortByUsage(db.tags.filter(t => !t.hidden || selTags.has(t.id)), 'tags');
     $('tagChips').innerHTML = list.map(t => `<button type="button" class="chip ${selTags.has(t.id) ? 'on' : ''}" data-tag="${t.id}">${esc(t.name)}</button>`).join('')
       + '<button type="button" class="chip add" data-act="addTag">＋ タグを追加</button>';
+  }
+  function applyRate() {
+    const m = machineOf($('f-machine').value), s = storeOf($('f-store').value);
+    const rate = (m && m.rate) || (s && s.rate);
+    if (rate) $('f-rate').value = rate;
   }
   function readForm() {
     const start = $('f-start').value, end = $('f-end').value;
     const rateRaw = $('f-rate').value.trim();
-    const store = $('f-store').value;
+    const store = $('f-store').value, machine = $('f-machine').value;
     return {
       date: $('f-date').value,
       invest: toInt($('f-invest').value),
@@ -490,8 +554,7 @@ function renderForm(id, date) {
       depositCount: toInt($('f-deposit').value),
       rate: rateRaw === '' ? '' : toRate(rateRaw),
       storeId: store === '__add' ? '' : store,
-      kind: $('f-kind').value,
-      machine: $('f-machine').value.trim(),
+      machineId: machine === '__add' ? '' : machine,
       table: toHalf($('f-table').value).trim(),
       startTime: start, endTime: end, playMinutes: minutesBetween(start, end),
       tags: [...selTags],
@@ -505,11 +568,12 @@ function renderForm(id, date) {
     $('h-deposit').textContent = fmt(c.dp);
     $('h-rate').textContent = (f.withdrawCount || f.depositCount) && !f.rate
       ? '⚠ 交換率が未入力のため、貯玉・引出は0円で計算されます'
-      : '1玉（1枚）あたりの円。5.6枚交換なら 17.86';
+      : '1玉（1枚）あたりの円。機種→店舗の順に設定値が入ります';
     $('h-dur').textContent = f.playMinutes ? `稼働時間：${durText(f.playMinutes)}` : '';
     const pv = $('pv');
     pv.textContent = signed(c.balance) + '円';
     pv.className = tone(c.balance);
+    $('pv-cash').textContent = (c.wd || c.dp) ? `（現金のみ ${signed(c.cashBalance)}円）` : '';
   }
   function saveForm() {
     const f = readForm();
@@ -517,7 +581,7 @@ function renderForm(id, date) {
     if (!f.invest && !f.collect && !f.withdrawCount && !f.depositCount && !confirm('金額がすべて0です。このまま保存しますか？')) return;
     if ((f.withdrawCount || f.depositCount) && !f.rate && !confirm('交換率が未入力のため、貯玉・引出は0円で計算されます。保存しますか？')) return;
     const now = Date.now();
-    if (r.id) Object.assign(r, f, { updatedAt: now });
+    if (r.id) { Object.assign(r, f, { updatedAt: now }); delete r.kind; }
     else db.records.push(Object.assign({ id: uid(), createdAt: now, updatedAt: now }, f));
     if (!saveDb()) return;
     const d = parseYmd(f.date);
@@ -532,6 +596,21 @@ function renderForm(id, date) {
     toast('削除しました');
     back();
   }
+  function bindSelect(elId, optionsFn, editFn) {
+    const el = $(elId);
+    let prev = el.value;
+    el.addEventListener('change', async () => {
+      if (el.value === '__add') {
+        const item = await editFn();
+        const val = item ? item.id : prev;
+        el.innerHTML = optionsFn(val);
+        el.value = val;
+      }
+      prev = el.value;
+      applyRate();
+      updatePreview();
+    });
+  }
 
   renderTagChips();
   ['f-invest', 'f-collect', 'f-withdraw', 'f-deposit', 'f-rate', 'f-table'].forEach(i => {
@@ -540,20 +619,10 @@ function renderForm(id, date) {
     el.addEventListener('focus', () => el.select());
   });
   ['f-start', 'f-end'].forEach(i => $(i).addEventListener('input', updatePreview));
-  let prevStore = r.storeId;
-  $('f-store').addEventListener('change', e => {
-    if (e.target.value === '__add') {
-      const s = promptStore();
-      if (s) { e.target.innerHTML = storeOptions(s.id); e.target.value = s.id; }
-      else e.target.value = prevStore;
-    }
-    const st = db.stores.find(x => x.id === e.target.value);
-    if (st && st.rate) $('f-rate').value = st.rate;
-    prevStore = e.target.value;
-    updatePreview();
-  });
+  bindSelect('f-store', storeOptions, () => editStore());
+  bindSelect('f-machine', machineOptions, () => editMachine());
   $('recForm').onsubmit = e => e.preventDefault();
-  app.onclick = e => {
+  app.onclick = async e => {
     const chip = e.target.closest('[data-tag]');
     if (chip) {
       const tid = chip.dataset.tag;
@@ -563,64 +632,110 @@ function renderForm(id, date) {
     }
     const a = e.target.closest('[data-act]');
     if (!a) return;
-    if (a.dataset.act === 'addTag') { const t = promptTag(); if (t) { selTags.add(t.id); renderTagChips(); } }
+    if (a.dataset.act === 'addTag') { const t = await editTag(); if (t) { selTags.add(t.id); renderTagChips(); } }
     if (a.dataset.act === 'save') saveForm();
     if (a.dataset.act === 'delete') deleteRecord();
   };
   updatePreview();
 }
 function storeOptions(selId) {
-  const list = db.stores.filter(s => !s.hidden || s.id === selId);
+  const list = sortByUsage(db.stores.filter(s => !s.hidden || s.id === selId), 'storeId');
   return '<option value="">指定なし</option>'
     + list.map(s => `<option value="${s.id}" ${s.id === selId ? 'selected' : ''}>${esc(s.name)}${s.hidden ? '（削除済み）' : ''}</option>`).join('')
     + '<option value="__add">＋ 店舗を追加…</option>';
 }
-function machineNames() {
-  const cnt = {};
-  for (const r of db.records) if (r.machine) cnt[r.machine] = (cnt[r.machine] || 0) + 1;
-  return Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a]);
+function machineOptions(selId) {
+  const list = sortByUsage(db.machines.filter(m => !m.hidden || m.id === selId), 'machineId');
+  return '<option value="">指定なし</option>'
+    + list.map(m => `<option value="${m.id}" ${m.id === selId ? 'selected' : ''}>${esc(m.name)}${m.kind === 'pachinko' ? '（パチンコ）' : ''}${m.hidden ? '（削除済み）' : ''}</option>`).join('')
+    + '<option value="__add">＋ 機種を追加…</option>';
 }
-function promptStore(current) {
-  const name = (prompt('店舗名', current ? current.name : '') || '').trim();
-  if (!name) return null;
-  const rateStr = prompt('この店舗の交換率（1玉・1枚あたりの円）\n分からなければ空欄でOK', current ? current.rate : (db.settings.defaultRate || ''));
-  const rate = rateStr && toRate(rateStr) ? toRate(rateStr) : '';
-  if (current) { current.name = name; current.rate = rate; saveDb(); return current; }
-  const s = { id: uid(), name, rate };
-  db.stores.push(s);
-  saveDb();
-  return s;
+
+/* ===== 店舗・機種・タグの追加と編集 ===== */
+function openEditor(title, fields, values) {
+  return new Promise(resolve => {
+    const ov = document.createElement('div');
+    ov.className = 'modal';
+    ov.innerHTML = `<div class="sheet"><h3>${esc(title)}</h3>
+      ${fields.map(f => {
+        const v = values[f.key] ?? '';
+        let input;
+        if (f.type === 'select') input = `<select data-k="${f.key}">${f.options.map(([ov2, lb]) => `<option value="${ov2}" ${String(v) === ov2 ? 'selected' : ''}>${esc(lb)}</option>`).join('')}</select>`;
+        else input = `<input data-k="${f.key}" value="${esc(v)}" ${f.type === 'rate' ? 'inputmode="decimal"' : ''} placeholder="${esc(f.placeholder || '')}" autocomplete="off">`;
+        return `<div class="field"><label>${esc(f.label)}</label>${input}${f.hint ? `<p class="hint">${esc(f.hint)}</p>` : ''}</div>`;
+      }).join('')}
+      <div class="sheet-btns"><button class="btn sub" data-m="cancel">キャンセル</button><button class="btn primary" data-m="ok">保存</button></div>
+    </div>`;
+    document.body.appendChild(ov);
+    const firstInput = ov.querySelector('input');
+    if (firstInput && !firstInput.value) firstInput.focus();
+    const close = val => { ov.remove(); resolve(val); };
+    ov.onclick = e => {
+      if (e.target === ov || e.target.dataset.m === 'cancel') return close(null);
+      if (e.target.dataset.m !== 'ok') return;
+      const out = {};
+      for (const f of fields) {
+        const raw = ov.querySelector(`[data-k="${f.key}"]`).value.trim();
+        out[f.key] = f.type === 'rate' ? (raw && toRate(raw) ? toRate(raw) : '') : raw;
+        if (f.required && !out[f.key]) { toast(`${f.label}を入力してください`); return; }
+      }
+      close(out);
+    };
+  });
 }
-function promptTag(current) {
-  const name = (prompt('タグ名', current ? current.name : '') || '').trim();
-  if (!name) return null;
-  if (current) { current.name = name; saveDb(); return current; }
-  const t = { id: uid(), name };
-  db.tags.push(t);
+function upsert(list, current, data) {
+  if (current) { Object.assign(current, data); saveDb(); return current; }
+  const dup = list.find(x => x.name === data.name);
+  if (dup) { Object.assign(dup, data, { hidden: false }); saveDb(); return dup; }
+  const item = Object.assign({ id: uid() }, data);
+  list.push(item);
   saveDb();
-  return t;
+  return item;
+}
+async function editStore(current) {
+  const v = await openEditor(current ? '店舗を編集' : '店舗を追加', [
+    { key: 'name', label: '店舗名', required: true, placeholder: '例：マルハン萩原東店' },
+    { key: 'rate', label: '交換率（円/玉・枚）', type: 'rate', placeholder: '例：20', hint: '空欄でもOK。5.6枚交換なら 17.86' }
+  ], current || { name: '', rate: db.settings.defaultRate });
+  return v ? upsert(db.stores, current, { name: v.name, rate: v.rate }) : null;
+}
+async function editMachine(current) {
+  const v = await openEditor(current ? '機種を編集' : '機種を追加', [
+    { key: 'name', label: '機種名', required: true, placeholder: '例：マイジャグラーV' },
+    { key: 'kind', label: '種別', type: 'select', options: [['slot', 'スロット'], ['pachinko', 'パチンコ']] },
+    { key: 'rate', label: '交換率（円/玉・枚）', type: 'rate', placeholder: '空欄なら店舗の交換率', hint: '1円パチなど、店舗の交換率と違う機種だけ入れてください' }
+  ], current || { name: '', kind: 'slot', rate: '' });
+  return v ? upsert(db.machines, current, { name: v.name, kind: v.kind || 'slot', rate: v.rate }) : null;
+}
+async function editTag(current) {
+  const v = await openEditor(current ? 'タグを編集' : 'タグを追加', [
+    { key: 'name', label: 'タグ名', required: true, placeholder: '例：取材日' }
+  ], current || { name: '' });
+  return v ? upsert(db.tags, current, { name: v.name }) : null;
 }
 
 /* ===== 詳細分析画面 ===== */
 function renderStats() {
+  const mode = view.statsMode;
   const thisYear = String(new Date().getFullYear());
   const years = [...new Set(db.records.map(r => r.date.slice(0, 4)).concat(thisYear))].sort().reverse();
   const sel = view.statsYear;
   const recs = sel === 'all' ? db.records : recordsWithPrefix(sel);
   const s = summarize(recs);
+  const p = pick(s, mode);
 
-  let labels, values, lastIdx;
-  if (sel === 'all') {
-    const ys = years.slice().reverse();
-    labels = ys; values = ys.map(y => summarize(recordsWithPrefix(y)).balance); lastIdx = ys.length - 1;
-  } else {
-    labels = Array.from({ length: 12 }, (_, i) => String(i + 1));
-    values = labels.map((_, i) => summarize(recordsWithPrefix(`${sel}-${pad(i + 1)}`)).balance);
-    lastIdx = sel === thisYear ? new Date().getMonth() : 11;
-  }
+  const periods = sel === 'all'
+    ? years.slice().reverse().map(y => ({ label: y + '年', short: y, prefix: y }))
+    : Array.from({ length: 12 }, (_, i) => ({ label: `${i + 1}月`, short: String(i + 1), prefix: `${sel}-${pad(i + 1)}` }));
+  const perSum = periods.map(pp => summarize(recordsWithPrefix(pp.prefix)));
+  const values = perSum.map(x => pick(x, mode).balance);
+  const labels = periods.map(pp => pp.short);
+  const lastIdx = sel === 'all' ? periods.length - 1 : (sel === thisYear ? new Date().getMonth() : 11);
   const cum = [];
   values.slice(0, lastIdx + 1).reduce((acc, v) => { cum.push(acc + v); return acc + v; }, 0);
-  const draw = s.n - s.win - s.lose;
+  const draw = s.n - p.win - p.lose;
+  const modeLabel = mode === 'cash' ? '（現金のみ）' : '';
+  const bal = r => mode === 'cash' ? calc(r).cashBalance : calc(r).balance;
 
   app.innerHTML = appbar('収支の詳細', true) + `
   <div class="page">
@@ -629,36 +744,56 @@ function renderStats() {
         ${years.map(y => `<option value="${y}" ${y === sel ? 'selected' : ''}>${y}年</option>`).join('')}
         <option value="all" ${sel === 'all' ? 'selected' : ''}>全期間</option>
       </select>
+      <div class="seg">
+        <button data-mode="all" class="${mode === 'all' ? 'on' : ''}">すべて</button>
+        <button data-mode="cash" class="${mode === 'cash' ? 'on' : ''}">現金のみ</button>
+      </div>
     </section>
     <section class="card">
-      <h2>${sel === 'all' ? '全期間' : sel + '年'}の成績</h2>
-      <div class="total ${tone(s.balance)}">${signed(s.balance)}円</div>
+      <h2>${sel === 'all' ? '全期間' : sel + '年'}の成績${modeLabel}</h2>
+      <div class="total ${tone(p.balance)}">${signed(p.balance)}円</div>
       <dl class="kv">
-        <dt>投資合計</dt><dd>${fmt(s.invest)}円</dd>
-        <dt>回収合計</dt><dd>${fmt(s.collect)}円</dd>
+        <dt>投資合計</dt><dd>${fmt(p.invest)}円</dd>
+        <dt>回収合計</dt><dd>${fmt(p.collect)}円</dd>
         <dt>稼働回数</dt><dd>${s.n}回</dd>
-        <dt>勝率</dt><dd>${s.n ? Math.round(s.win / s.n * 100) + '%' : '-'}（${s.win}勝${s.lose}敗${draw ? draw + '分' : ''}）</dd>
-        <dt>平均収支</dt><dd>${s.n ? signed(s.balance / s.n) + '円' : '-'}</dd>
+        <dt>勝率</dt><dd>${s.n ? Math.round(p.win / s.n * 100) + '%' : '-'}（${p.win}勝${p.lose}敗${draw ? draw + '分' : ''}）</dd>
+        <dt>平均収支</dt><dd>${s.n ? signed(p.balance / s.n) + '円' : '-'}</dd>
         <dt>稼働時間</dt><dd>${s.minutes ? durText(s.minutes) : '-'}</dd>
-        <dt>時給</dt><dd>${s.minutes ? signed(s.timedBalance / (s.minutes / 60)) + '円' : '-'}</dd>
+        <dt>時給</dt><dd>${s.minutes ? signed(p.timed / (s.minutes / 60)) + '円' : '-'}</dd>
       </dl>
       ${s.minutes ? '<p class="hint">時給は稼働時間を入れた記録だけで計算しています</p>' : ''}
     </section>
-    <section class="card"><h2>${sel === 'all' ? '年別' : '月別'}の収支</h2>${barChart(values, labels)}</section>
-    <section class="card"><h2>累計収支の推移</h2>${lineChart(cum, labels)}</section>
-    ${breakdownCard('店舗別', groupRecords(recs, r => [storeName(r.storeId) || '指定なし']))}
-    ${breakdownCard('種別', groupRecords(recs, r => [KIND_LABEL[r.kind] || '指定なし']))}
-    ${breakdownCard('機種別', groupRecords(recs, r => [r.machine || '指定なし']))}
-    ${breakdownCard('タグ別', groupRecords(recs, r => (r.tags || []).map(tagName).filter(Boolean)))}
-    ${breakdownCard('曜日別', groupRecords(recs, r => [WEEK[parseYmd(r.date).getDay()] + '曜']), WEEK.map(w => w + '曜'))}
+    <section class="card"><h2>${sel === 'all' ? '年別' : '月別'}の収支${modeLabel}</h2>${barChart(values, labels)}</section>
+    <section class="card"><h2>累計収支の推移${modeLabel}</h2>${lineChart(cum, labels)}</section>
+    <section class="card"><h2>${sel === 'all' ? '年別' : '月別'}一覧</h2>${periodTable(periods, perSum, s, sel === 'all' ? '年' : '月')}</section>
+    ${breakdownCard('店舗別' + modeLabel, groupRecords(recs, r => [storeName(r.storeId) || '指定なし'], bal))}
+    ${breakdownCard('機種別' + modeLabel, groupRecords(recs, r => [machineName(r.machineId) || '指定なし'], bal))}
+    ${breakdownCard('種別' + modeLabel, groupRecords(recs, r => [KIND_LABEL[kindOf(r)] || '指定なし'], bal))}
+    ${breakdownCard('タグ別' + modeLabel, groupRecords(recs, r => (r.tags || []).map(tagName).filter(Boolean), bal))}
+    ${breakdownCard('曜日別' + modeLabel, groupRecords(recs, r => [WEEK[parseYmd(r.date).getDay()] + '曜'], bal), WEEK.map(w => w + '曜'))}
   </div>`;
 
   $('statsYear').onchange = e => { view.statsYear = e.target.value; renderStats(); };
+  app.onclick = e => {
+    const b = e.target.closest('[data-mode]');
+    if (b && b.dataset.mode !== view.statsMode) { view.statsMode = b.dataset.mode; renderStats(); }
+  };
 }
-function groupRecords(recs, keysFn) {
+function periodTable(periods, perSum, total, unit) {
+  const rows = periods.map((pp, i) => {
+    const x = perSum[i];
+    if (!x.n) return '';
+    return `<tr><td>${pp.label}</td><td>${x.n}</td><td class="${tone(x.balance)}">${signed(x.balance)}</td><td class="${tone(x.cashBalance)}">${signed(x.cashBalance)}</td></tr>`;
+  }).join('');
+  if (!rows) return '<p class="empty">データがありません</p>';
+  return `<table class="tbl"><thead><tr><th>${unit}</th><th>回数</th><th>全体</th><th>現金のみ</th></tr></thead><tbody>${rows}
+    <tr class="sum"><td>合計</td><td>${total.n}</td><td class="${tone(total.balance)}">${signed(total.balance)}</td><td class="${tone(total.cashBalance)}">${signed(total.cashBalance)}</td></tr>
+    </tbody></table>`;
+}
+function groupRecords(recs, keysFn, balFn) {
   const map = {};
   for (const r of recs) {
-    const b = calc(r).balance;
+    const b = balFn(r);
     for (const k of keysFn(r)) {
       const g = map[k] || (map[k] = { name: k, n: 0, balance: 0, win: 0 });
       g.n++; g.balance += b; if (b > 0) g.win++;
@@ -714,35 +849,32 @@ function lineChart(values, labels) {
 }
 
 /* ===== 設定画面 ===== */
+function listCard(title, items, subFn, editAct, delAct, addAct, addLabel) {
+  return `<section class="card">
+    <h2>${title}</h2>
+    ${items.length ? '<ul class="list">' + items.map(it => `<li>
+      <div><div class="main">${esc(it.name)}</div>${subFn ? `<div class="sub">${esc(subFn(it))}</div>` : ''}</div>
+      <div class="ops"><button class="mini-btn" data-act="${editAct}" data-id="${it.id}">編集</button><button class="mini-btn danger" data-act="${delAct}" data-id="${it.id}">削除</button></div>
+    </li>`).join('') + '</ul>' : '<p class="empty">まだ登録がありません</p>'}
+    <button class="btn wide" data-act="${addAct}">＋ ${addLabel}を追加</button>
+  </section>`;
+}
 function renderSettings() {
-  const stores = db.stores.filter(s => !s.hidden);
-  const tags = db.tags.filter(t => !t.hidden);
+  const stores = sortByUsage(db.stores.filter(s => !s.hidden), 'storeId');
+  const machines = sortByUsage(db.machines.filter(m => !m.hidden), 'machineId');
+  const tags = sortByUsage(db.tags.filter(t => !t.hidden), 'tags');
 
   app.innerHTML = appbar('設定', true) + `
   <div class="page">
     <section class="card">
       <h2>基本設定</h2>
       <div class="row flat"><label class="k" for="s-rate">標準の交換率</label><div class="v"><input id="s-rate" class="num" inputmode="decimal" placeholder="例：20" value="${esc(db.settings.defaultRate)}"><span class="unit">円/玉・枚</span></div></div>
-      <p class="hint">新しく入力するときの初期値です。店舗を選ぶと、その店舗の交換率に置き換わります。</p>
+      <p class="hint">店舗にも機種にも交換率がないときに使う値です。</p>
     </section>
 
-    <section class="card">
-      <h2>店舗</h2>
-      ${stores.length ? '<ul class="list">' + stores.map(s => `<li>
-        <div><div class="main">${esc(s.name)}</div><div class="sub">交換率：${s.rate ? s.rate + '円' : '未設定'}</div></div>
-        <div class="ops"><button class="mini-btn" data-act="editStore" data-id="${s.id}">編集</button><button class="mini-btn danger" data-act="delStore" data-id="${s.id}">削除</button></div>
-      </li>`).join('') + '</ul>' : '<p class="empty">まだ登録がありません</p>'}
-      <button class="btn wide" data-act="addStore">＋ 店舗を追加</button>
-    </section>
-
-    <section class="card">
-      <h2>タグ</h2>
-      ${tags.length ? '<ul class="list">' + tags.map(t => `<li>
-        <div class="main">${esc(t.name)}</div>
-        <div class="ops"><button class="mini-btn" data-act="editTag" data-id="${t.id}">編集</button><button class="mini-btn danger" data-act="delTag" data-id="${t.id}">削除</button></div>
-      </li>`).join('') + '</ul>' : '<p class="empty">まだ登録がありません</p>'}
-      <button class="btn wide" data-act="addTag">＋ タグを追加</button>
-    </section>
+    ${listCard('店舗', stores, s => `交換率：${s.rate ? s.rate + '円' : '未設定'}`, 'editStore', 'delStore', 'addStore', '店舗')}
+    ${listCard('機種', machines, m => `${KIND_LABEL[m.kind] || 'スロット'}・交換率：${m.rate ? m.rate + '円' : '店舗に合わせる'}`, 'editMachine', 'delMachine', 'addMachine', '機種')}
+    ${listCard('タグ', tags, null, 'editTag', 'delTag', 'addTag', 'タグ')}
 
     <section class="card">
       <h2>バックアップ</h2>
@@ -768,21 +900,27 @@ function renderSettings() {
   $('importFile').onchange = e => { if (e.target.files[0]) importBackup(e.target.files[0]); e.target.value = ''; };
   showPersistInfo();
 
-  app.onclick = e => {
+  app.onclick = async e => {
     const a = e.target.closest('[data-act]');
     if (!a) return;
     const id = a.dataset.id;
+    const find = list => list.find(x => x.id === id);
+    let changed = null;
     switch (a.dataset.act) {
-      case 'addStore': if (promptStore()) renderSettings(); break;
-      case 'editStore': if (promptStore(db.stores.find(s => s.id === id))) renderSettings(); break;
+      case 'addStore': changed = await editStore(); break;
+      case 'editStore': changed = await editStore(find(db.stores)); break;
       case 'delStore': hideItem(db.stores, id, '店舗'); break;
-      case 'addTag': if (promptTag()) renderSettings(); break;
-      case 'editTag': if (promptTag(db.tags.find(t => t.id === id))) renderSettings(); break;
+      case 'addMachine': changed = await editMachine(); break;
+      case 'editMachine': changed = await editMachine(find(db.machines)); break;
+      case 'delMachine': hideItem(db.machines, id, '機種'); break;
+      case 'addTag': changed = await editTag(); break;
+      case 'editTag': changed = await editTag(find(db.tags)); break;
       case 'delTag': hideItem(db.tags, id, 'タグ'); break;
       case 'export': exportBackup(); break;
       case 'import': $('importFile').click(); break;
       case 'wipe': wipeAll(); break;
     }
+    if (changed) { toast('保存しました'); renderSettings(); }
   };
 }
 function hideItem(list, id, label) {
@@ -814,12 +952,13 @@ function importBackup(file) {
     if (!d || !Array.isArray(d.records)) { alert('このアプリのバックアップファイルではないようです。'); return; }
     if (!confirm(`${d.records.length}件の記録で上書きします。\n今のデータは消えます。よろしいですか？`)) return;
     db = normalizeDb(d);
+    migrate(db);
     if (saveDb()) { toast('復元しました'); renderSettings(); }
   };
   reader.readAsText(file);
 }
 function wipeAll() {
-  if (!confirm('すべての記録・店舗・タグを削除します。よろしいですか？')) return;
+  if (!confirm('すべての記録・店舗・機種・タグを削除します。よろしいですか？')) return;
   if (!confirm('本当に削除しますか？元に戻せません。')) return;
   db = emptyDb();
   saveDb();
